@@ -28,8 +28,12 @@ Run it:
 - The corpus has SMS and email channels. ICICI has two SMS formats. HDFC has two bank-account SMS formats and one card format. Each bank's emails use one format.
 - The corpus has 522 raw messages. The pipeline writes 256 transactions, while the fixture expects 257. Account 9075 reconciles; account 4821 has the separate 7,500 discrepancy.
 
+---
+
 ## The document store
  Is not implemented.
+
+---
 
 ## AI Disclosure
 I used GitHub Copilot in VS Code for code search, debugging, small edits, and focused checks. I checked the results against the corpus myself.
@@ -37,6 +41,8 @@ I used GitHub Copilot in VS Code for code search, debugging, small edits, and fo
 One wrong suggestion was to find or invent a missing 7,500 transaction so the numbers would match. The corpus has no such message, so I chose to report the difference instead. Another suggestion was to map card `3310` to account `4821`; I rejected that because the data does not prove the mapping. 
 
 One more mistake happened after the parsers and ingest service were fixed. I ran verify.sh and got 145 transactions for **4821 and 92 for **9075. The AI kept on suggesting that transfer calculations were wrong. After checking, the real issue was amounts calculation was creating two different entries for same transaction where in one transaction it was an integer value hence taking available balance as debited amount.
+
+---
 
 ## Unfinished
 
