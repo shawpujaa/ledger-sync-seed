@@ -59,9 +59,10 @@ public final class IngestService {
             byKey.computeIfAbsent(key, ignored -> new ArrayList<>()).add(parsed.get());
         }
 
+        List<List<ParsedTxn>> groups = new ArrayList<>(byKey.values());
         List<NormalizedTxn> written = new ArrayList<>();
-        for (List<ParsedTxn> group : byKey.values()) {
-            written.add(toTransaction(group));
+        for (int i = 0; i < groups.size(); i++) {
+            written.add(toTransaction(groups.get(i), isTransferLeg(i, groups)));
         }
 
         for (NormalizedTxn txn : written) {
@@ -88,7 +89,7 @@ public final class IngestService {
         return out;
     }
 
-    private NormalizedTxn toTransaction(List<ParsedTxn> group) {
+    private NormalizedTxn toTransaction(List<ParsedTxn> group, boolean transfer) {
         ParsedTxn first = group.getFirst();
         List<String> ids = group.stream()
                 .map(ParsedTxn::sourceMessageId)
@@ -101,22 +102,42 @@ public final class IngestService {
                 first.occurredAt(),
                 first.direction(),
                 first.amount(),
-                categoryFor(first),
+                categoryFor(first, transfer),
                 first.merchant(),
                 ids);
     }
 
-    private static Category categoryFor(ParsedTxn p) {
+    private static boolean isTransferLeg(int index, List<List<ParsedTxn>> groups) {
+        ParsedTxn candidate = groups.get(index).getFirst();
+        if (!isTransferLike(normalizeMerchant(candidate.merchant()).toUpperCase(Locale.ROOT))) {
+            return false;
+        }
+
+        for (int otherIndex = 0; otherIndex < groups.size(); otherIndex++) {
+            if (otherIndex == index) continue;
+            ParsedTxn other = groups.get(otherIndex).getFirst();
+            if (!other.accountLast4().equals(candidate.accountLast4())
+                    && other.direction() != candidate.direction()
+                    && other.amount().compareTo(candidate.amount()) == 0
+                    && normalizeMerchant(other.merchant()).equalsIgnoreCase(
+                            normalizeMerchant(candidate.merchant()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Category categoryFor(ParsedTxn p, boolean transfer) {
         String merchant = normalizeMerchant(p.merchant());
         String up = merchant.toUpperCase(Locale.ROOT);
 
-        if (isTransferLike(up)) {
+        if (transfer) {
             return Category.TRANSFER;
         }
 
         if (p.direction() == Direction.DEBIT
                 && p.amount().compareTo(new BigDecimal("100.00")) <= 0
-                && up.startsWith("UPI/")) {
+                && up.startsWith("UPI")) {
             return Category.MICRO;
         }
 
