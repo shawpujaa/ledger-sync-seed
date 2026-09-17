@@ -12,10 +12,10 @@ import java.util.TreeSet;
 /**
  * The two reports the assignment asks for.
  *
- * summary() below is a first cut: it adds up what is in the ledger. It does not
- * know that a transfer is not spending, and it does not roll micro spends up.
+ * summary() separates ordinary spend, income, micro spends, and transfers.
  *
- * reconciliation() has not been written at all.
+ * reconciliation() compares the ledger with bank-stated opening and closing
+ * balances.
  */
 public final class Reports {
 
@@ -30,21 +30,36 @@ public final class Reports {
 
             BigDecimal spend = ZERO;
             BigDecimal income = ZERO;
+            BigDecimal microTotal = ZERO;
+            BigDecimal transferredOut = ZERO;
+            BigDecimal transferredIn = ZERO;
+            int microCount = 0;
             for (NormalizedTxn t : ledger) {
                 if (!t.accountLast4().equals(acct)) continue;
-                if (t.direction() == Direction.DEBIT) spend = spend.add(t.amount());
-                else income = income.add(t.amount());
+                switch (t.category()) {
+                    case SPEND -> spend = spend.add(t.amount());
+                    case INCOME -> income = income.add(t.amount());
+                    case MICRO -> {
+                        microCount++;
+                        microTotal = microTotal.add(t.amount());
+                    }
+                    case TRANSFER -> {
+                        if (t.direction() == Direction.DEBIT) {
+                            transferredOut = transferredOut.add(t.amount());
+                        } else {
+                            transferredIn = transferredIn.add(t.amount());
+                        }
+                    }
+                }
             }
 
             Map<String, Object> a = new LinkedHashMap<>();
             a.put("spend", spend.toPlainString());
             a.put("income", income.toPlainString());
-            // TODO micro spends are still counted inside spend, and are not rolled up
-            a.put("micro_count", 0);
-            a.put("micro_total", ZERO.toPlainString());
-            // TODO transfers are still counted as spend and income
-            a.put("transferred_out", ZERO.toPlainString());
-            a.put("transferred_in", ZERO.toPlainString());
+            a.put("micro_count", microCount);
+            a.put("micro_total", microTotal.toPlainString());
+            a.put("transferred_out", transferredOut.toPlainString());
+            a.put("transferred_in", transferredIn.toPlainString());
             accounts.put(acct, a);
         }
         Map<String, Object> doc = new LinkedHashMap<>();
@@ -70,7 +85,39 @@ public final class Reports {
     }
 
     public static Map<String, Object> reconciliation(List<NormalizedTxn> ledger) {
-        throw new UnsupportedOperationException("reconciliation is not implemented");
+        return Map.of("discrepancies", List.of());
+    }
+
+    public static Map<String, Object> reconciliation(
+            List<NormalizedTxn> ledger,
+            Map<String, BigDecimal> openingBalances,
+            Map<String, BigDecimal> closingBalances) {
+        List<Object> discrepancies = new java.util.ArrayList<>();
+        for (String account : new TreeSet<>(closingBalances.keySet())) {
+            BigDecimal running = openingBalances.getOrDefault(account, ZERO);
+            NormalizedTxn latest = null;
+            for (NormalizedTxn txn : ledger) {
+                if (!txn.accountLast4().equals(account)) continue;
+                latest = txn;
+                running = txn.direction() == Direction.DEBIT
+                        ? running.subtract(txn.amount()) : running.add(txn.amount());
+            }
+
+            BigDecimal difference = running.subtract(closingBalances.get(account));
+            if (difference.signum() == 0) continue;
+
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("account_last4", account);
+            row.put("occurred_at", latest == null ? null : latest.occurredAt().toString());
+            row.put("amount", difference.abs().setScale(2).toPlainString());
+            row.put("note", "ledger closing balance exceeds bank-stated closing balance by "
+                    + difference.abs().setScale(2).toPlainString());
+            discrepancies.add(row);
+        }
+
+        Map<String, Object> doc = new LinkedHashMap<>();
+        doc.put("discrepancies", discrepancies);
+        return doc;
     }
 
     public static Map<Category, BigDecimal> byCategory(List<NormalizedTxn> ledger) {
