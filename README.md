@@ -1,122 +1,3 @@
-# ledger-sync
-
-Scaffolding for the Simplify Money **Software Engineering Intern (Backend, Java)** take-home.
-
-Read this file completely before you write any code. Then read
-`fixtures/corpus-a.jsonl` — not all 500 lines, but enough of them that you stop
-being surprised.
-
-> **Do not open a pull request here.** Work in your own fork and submit by email.
-> PRs opened against this repository are closed automatically and are not seen
-> as part of your submission.
-
----
-
-## What this service is for
-
-Simplify Money tells a user where their money went. To do that, something has to
-read the bank SMS and bank emails sitting on their phone and turn them into a
-ledger the user can trust.
-
-This repository is that something, half-finished, with a live incident open
-against it.
-
----
-
-## What you are being asked to do, exactly
-
-**Input:** `fixtures/corpus-a.jsonl` — one JSON object per line, each a single
-SMS or email exactly as the phone uploaded it:
-
-```json
-{"message_id":"m-00004-9c11ae","channel":"sms","sender":"AD-HDFCBK-S",
- "received_at":"2026-07-04T07:19:00+05:30","device_id":"dev-3f1a90c47b21",
- "body":"Rs.5 debited from a/c **4821 on 04-07-26 at 07:19 to UPI/WATER CAN. Avl Bal: Rs.92,213.10. Not you? Call 18002586161"}
-```
-
-**Output:** three JSON files, written by `report <dir>`.
-
-### 1. `ledger.json` — one entry per real transaction
-
-```json
-{"transactions": [
-  {"account_last4":"4821","occurred_at":"2026-07-04T20:24:00+05:30",
-   "direction":"debit","amount":"2499.50","category":"SPEND",
-   "merchant":"AMAZON PAY","source_message_ids":["m-00087-1a2b3c","m-00089-77de01"]}
-]}
-```
-
-`occurred_at` is when the **bank says the transaction happened**, not when the
-message arrived. `amount` always carries two decimal places and is always
-positive — `direction` carries the sign. `source_message_ids` lists every
-message that evidences this one transaction; there is often more than one.
-
-### 2. `summary.json` — per-account totals
-
-```json
-{"accounts": {
-  "4821": {"spend":"87068.38","income":"101340.83",
-           "micro_count":52,"micro_total":"2357.51",
-           "transferred_out":"25000.00","transferred_in":"6000.00"}
-}}
-```
-
-### 3. `reconciliation.json` — anything your ledger cannot account for
-
-```json
-{"discrepancies": [
-  {"account_last4":"4821","occurred_at":"...","amount":"...","note":"..."}
-]}
-```
-
-We are not telling you how to find these, or whether there are any. Working out
-what "cannot account for" means here, and what in the data lets you check it, is
-part of the task.
-
----
-
-## The four categories
-
-Every transaction gets exactly one.
-
-| Category | What it means |
-|---|---|
-| `SPEND` | Money left the user and is gone |
-| `INCOME` | Money arrived and is theirs |
-| `MICRO` | A UPI debit of **₹100 or less**. Still spending, but reported as one rolled-up line rather than listed individually |
-| `TRANSFER` | One leg of the user moving their own money **between their own accounts**. Real — the money moved — but it is neither spending nor income, and counting it as either inflates both |
-
-`micro_total` is the sum of `MICRO`. `spend` is the sum of `SPEND` and does
-**not** include `MICRO` or `TRANSFER`. `income` likewise excludes `TRANSFER`.
-
----
-
-## Your checkpoint
-
-`fixtures/corpus-a-totals.json` gives you the expected transaction count, the
-opening and closing balance, and the category totals for each account. No
-row-level answers. Use it to check yourself.
-
-If your numbers do not match it, **say so and say why.** A submission whose
-numbers match because they were made to match is worse than one that does not
-match and explains itself. We can tell the difference, and we check.
-
----
-
-## Where the code is now
-
-```
-src/main/java/in/simplifymoney/ledgersync/
-  model/       RawMessage, NormalizedTxn, Category, Direction
-  json/        a small JSON reader/writer, so this builds with only a JDK
-  parse/       one parser per message format
-  ingest/      reads a corpus, saves what it finds
-  store/       the SQL ledger, and the document store you are going to add
-  report/      the three output documents
-  App.java     migrate | ingest | report
-  SelfCheck.java
-```
-
 Run it:
 
 ```bash
@@ -126,31 +7,26 @@ Run it:
 ./gradlew run --args="ingest fixtures/corpus-a.jsonl"
 ./gradlew run --args="report submission/"
 ```
+---
 
-`./verify.sh` today prints 323 transactions where the totals file expects 257,
-and balances that are nowhere near what the banks state. That is the starting
-point, not a bug you have hit.
+## Decisions
+
+1. I used the existing plain Java format and did not add any framework, since this project reads a file and writes reports, so a web framework was not required.
+2. Since there was no transaction id to uniquely identify a transaction I used combination of account_last4, occurred_at, direction, amount and merchant to uniquely identify any transaction. If two transactions strictly had all of these data same they were considered as same.
+3. Even after adding email parser and adding all icici sms patterns, the two accounts listed 237 transactions only. The rest came from hdfc credit card ending with **3310, which I realsied after debugging.
+4. Bifarcated transactions as MICRO/ TRANSFERS in ingest service.
+5. I only marked a transaction as TRANSFER when it was debited from one account and credited in the other account at the same time. Not all IMPS/P2A/, NEFT INWARD, P2P/REFUND merchant type is considered as transfer. Rest of them were considered normal spend, income.
+6. Changed the old amount parser to accept integer values and values with one decimal place as well. This was the reason for production bug. I only accounted for till 2 decimal places since the corpus had till that only.
+7. One transaction for account **4821 is not correct. It reports a debit of 75 but change in the available balance is of Rs.7575. Added that separately in reconcilation. That is why spend amount in summary report for **4821 account does not match. 
 
 ---
 
-## What is missing, in the order we would do it
-
-1. **`EmailParser` is a stub.** Every email in the corpus is currently dropped.
-2. **`IciciSmsParser` reads one of the ICICI formats.** There is at least one
-   more in the corpus, falling straight through.
-3. **Nothing deduplicates.** `IngestService` saves one transaction per message.
-   One transaction is not one message.
-4. **Categories are decided from the direction alone.** No `MICRO`, no
-   `TRANSFER`.
-5. **`Reports.summary` adds up whatever it is given.** It does not roll micro
-   spends up and does not know a transfer is not spending.
-6. **`Reports.reconciliation` is not written.**
-7. **`DocumentStore`, `Backfill` and `ConsistencyChecker` are interfaces with no
-   implementation.** See below.
-8. **`incident/INC-2026-09-11.md` is open.** Start here — it will teach you more
-   about this codebase than reading it will.
-
----
+## What The Data Showed
+- TRANSFERS have IMPS/P2A/, NEFT INWARD, P2P/REFUND in the merchant name.
+- Not all message/email is of any transaction some are random message/emails as well.
+- There are only two accounts associated ending with **4821 and **9075. One more source is listed which is an HDFC card ending with **3310.
+- There are only two channels email and sms. Email had only one format in which emails are sent. ICICI bank had two sms formats. HDFC bank sms's had two sms formats.
+- 
 
 ## The document store
 
